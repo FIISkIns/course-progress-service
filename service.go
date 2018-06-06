@@ -56,6 +56,23 @@ func initConnection() {
 	} else {
 		fmt.Println("Conexiune stabilita")
 	}
+
+	var res int
+	err = connection.QueryRow("SELECT count(table_name) FROM information_schema.tables WHERE table_schema = 'CourseProgress' AND table_name = 'COURSEPROGRESS'").Scan(&res)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if res != 1 {
+		stmt, err := connection.Prepare("create table COURSEPROGRESS (user_id varchar(20), course_id varchar(20) NOT NULL, task_id varchar(20) NOT NULL, progress varchar(20) NOT NULL, CONSTRAINT pk_courseprogress PRIMARY KEY (user_id,course_id,task_id))")
+		if err != nil {
+			log.Fatal(err)
+		}
+		_, err = stmt.Exec()
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("Table COURSEPROGRESS has been successfully created")
+	}
 }
 
 func closeConnection() {
@@ -246,7 +263,7 @@ func getAllTasks(courseTasks []string, seenTasks []TaskProgress) []TaskProgress 
 		}
 		if !seen {
 			task.TaskId = courseTask
-			task.Progress = "unresolved"
+			task.Progress = "not started"
 			allTasks = append(allTasks, task)
 		}
 	}
@@ -270,7 +287,7 @@ func getAllUserTasks(courseTasks []string, seenItems []ProgressItem, courseId st
 		if !seen {
 			item.CourseId = courseId
 			item.TaskId = courseTask
-			item.Progress = "unresolved"
+			item.Progress = "not started"
 			progressItems = append(progressItems, item)
 		}
 	}
@@ -298,7 +315,7 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 			for _, task := range courseTasks {
 				var taskProgress TaskProgress
 				taskProgress.TaskId = task
-				taskProgress.Progress = "unresolved"
+				taskProgress.Progress = "not started"
 				allTasks = append(allTasks, taskProgress)
 				message, _ := json.Marshal(allTasks)
 				w.Header().Set("Content-Type", "application/json")
@@ -307,6 +324,7 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 		}
 	} else {
 		http.Error(w, "User or course not found", http.StatusNotFound)
+		return
 	}
 }
 
@@ -331,16 +349,18 @@ func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprout
 			} else {
 				var task TaskProgress
 				task.TaskId = ps.ByName("task")
-				task.Progress = "unresolved"
+				task.Progress = "not started"
 				message, _ := json.Marshal(task)
 				w.Header().Set("Content-Type", "application/json")
 				w.Write(message)
 			}
 		} else {
 			http.Error(w, "Task not found", http.StatusNotFound)
+			return
 		}
 	} else {
 		http.Error(w, "User or course not found", http.StatusNotFound)
+		return
 	}
 }
 
@@ -371,6 +391,7 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 
 	if err != nil {
 		http.Error(w, "Failed to update task progress", http.StatusInternalServerError)
+		return
 	}
 }
 
@@ -381,6 +402,7 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 	userProgress, err := getUserProgress(ps.ByName("user"))
 	if err != nil {
 		http.Error(w, "Error accesing the database", http.StatusInternalServerError)
+		return
 	}
 	for courseId, URL := range URLs {
 		var courseTasks = getCourseTasks(URL)
@@ -391,12 +413,13 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 			w.Write(message)
 		} else {
 			http.Error(w, "No progress found", http.StatusNotFound)
+			return
 		}
 	}
 }
 
 func main() {
-
+	initConfig()
 	initConnection()
 	router := httprouter.New()
 	router.GET("/:user", HandleUserGet)
