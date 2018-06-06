@@ -15,26 +15,44 @@ import (
 var connection *sql.DB
 
 type CourseProgressInfo struct {
-	UserId   string `json:"user_id"`
-	CourseId string `json:"course_id"`
-	TaskId   string `json:"task_id"`
+	UserId   string `json:"userId"`
+	CourseId string `json:"courseId"`
+	TaskId   string `json:"taskId"`
+	Progress string `json:"progress"`
+}
+
+type ProgressItem struct {
+	CourseId string `json:"courseId"`
+	TaskId   string `json:"taskId"`
 	Progress string `json:"progress"`
 }
 
 type TaskProgress struct {
-	TaskId   string `json:"task_id"`
+	TaskId   string `json:"taskId"`
 	Progress string `json:"progress"`
 }
 
 type CourseProgress struct {
-	CourseId string         `json:"course_id"`
+	CourseId string         `json:"courseId"`
 	Tasks    []TaskProgress `json:"tasks"`
+}
+
+type CourseInfo struct {
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type CourseList struct {
+	URLs         []string `json:"urls"`
+	Titles       []string `json:"titles"`
+	Descriptions []string `json:"descriptions"`
 }
 
 func initConnection() {
 	var err error
 	connection, err = sql.Open("mysql",
-		"Geo:password@/CourseProgress")
+		"Geo:parola@/CourseProgress")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,6 +67,13 @@ func initConnection() {
 
 func closeConnection() {
 	connection.Close()
+}
+
+func pingConnection() {
+	err := connection.Ping()
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func getTaskProgress(userID, courseID, taskID string) TaskProgress {
@@ -67,7 +92,9 @@ func getTaskProgress(userID, courseID, taskID string) TaskProgress {
 		}
 	}
 	var taskProgress TaskProgress
-	taskProgress.TaskId = taskID
+	if task != "" {
+		taskProgress.TaskId = taskID
+	}
 	taskProgress.Progress = task
 	return taskProgress
 }
@@ -125,31 +152,184 @@ func getCourseProgress(userId, courseId string) []TaskProgress {
 	return tasks
 }
 
+func getUserProgress(userId string) ([]ProgressItem, error) {
+	stmt, err := connection.Prepare("select course_id, task_id, progress from COURSEPROGRESS where user_id =?")
+	if err != nil {
+		fmt.Println("Eroare la select: ", err)
+		return nil, err
+	}
+	defer stmt.Close()
+	rows, err := stmt.Query(userId)
+
+	items := make([]ProgressItem, 0)
+	for rows.Next() {
+		var item ProgressItem
+		if err := rows.Scan(&item.CourseId, &item.TaskId, &item.Progress); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return items, nil
+}
+
+func getCourseURL(course string) string {
+	var courseInfo CourseInfo
+	resp, err := http.Get("http://127.0.0.1:8001/courses/" + course)
+	if err != nil {
+		log.Fatal(err)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+	}
+	json.Unmarshal(body, &courseInfo)
+	return courseInfo.URL
+}
+
+func getAllCoursesURL() []string {
+	var coursesInfo []CourseInfo
+	URLs := make([]string, 0)
+	resp, err := http.Get("http://127.0.0.1:8001/courses/")
+	if err != nil {
+		log.Fatal(err)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+	}
+	json.Unmarshal(body, &coursesInfo)
+	for _, course := range coursesInfo {
+		URLs = append(URLs, course.URL)
+	}
+	return URLs
+}
+
+func getCourseTasks(URL string) []string {
+	type BaseTaskInfo struct {
+		Id    string `json:"id"`
+		Title string `json:"title"`
+	}
+
+	type TaskGroup struct {
+		Title string          `json:"title"`
+		Tasks []*BaseTaskInfo `json:"tasks"`
+	}
+
+	var taskGroup []TaskGroup
+	tasks := make([]string, 0)
+	resp, err := http.Get("http://" + URL + "/tasks")
+	if err != nil {
+		log.Fatal(err)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+	}
+	json.Unmarshal(body, &taskGroup)
+
+	for _, taskGroup := range taskGroup {
+		for _, taskInfo := range taskGroup.Tasks {
+			tasks = append(tasks, taskInfo.Id)
+		}
+	}
+	return tasks
+}
+
+func getAllTasks(courseTasks []string, seenTasks []TaskProgress) []TaskProgress {
+	allTasks := make([]TaskProgress, 0)
+	var task TaskProgress
+	for _, courseTask := range courseTasks {
+		var seen = false
+		for _, seenTask := range seenTasks {
+			if courseTask == seenTask.TaskId {
+				seen = true
+				task.TaskId = seenTask.TaskId
+				task.Progress = seenTask.Progress
+				allTasks = append(allTasks, task)
+			}
+		}
+		if !seen {
+			task.TaskId = courseTask
+			task.Progress = "unresolved"
+			allTasks = append(allTasks, task)
+		}
+	}
+	return allTasks
+}
+
 func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	var courseProgress CourseProgress
-	courseProgress.CourseId = ps.ByName("course")
-	courseProgress.Tasks = getCourseProgress(ps.ByName("user"), ps.ByName("course"))
-	if len(courseProgress.Tasks) != 0 {
-		message, _ := json.Marshal(courseProgress)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(message)
+	pingConnection()
+
+	var URL = getCourseURL(ps.ByName("course"))
+	var courseTasks = getCourseTasks(URL)
+
+	if len(courseTasks) != 0 {
+		var courseProgress CourseProgress
+		courseProgress.CourseId = ps.ByName("course")
+		courseProgress.Tasks = getCourseProgress(ps.ByName("user"), ps.ByName("course"))
+
+		if len(courseProgress.Tasks) != 0 {
+			var allTasks = getAllTasks(courseTasks, courseProgress.Tasks)
+			message, _ := json.Marshal(allTasks)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(message)
+		} else {
+			allTasks := make([]TaskProgress, 0)
+			for _, task := range courseTasks {
+				var taskProgress TaskProgress
+				taskProgress.TaskId = task
+				taskProgress.Progress = "unresolved"
+				allTasks = append(allTasks, taskProgress)
+				message, _ := json.Marshal(allTasks)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(message)
+			}
+		}
 	} else {
-		http.Error(w, "User didn't start this course", http.StatusNotFound)
+		http.Error(w, "User or course not found", http.StatusNotFound)
 	}
 }
 
 func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	taskProgress := getTaskProgress(ps.ByName("user"), ps.ByName("course"), ps.ByName("task"))
-	if taskProgress.Progress != "" {
-		message, _ := json.Marshal(taskProgress)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(message)
+	pingConnection()
+
+	var URL = getCourseURL(ps.ByName("course"))
+	var courseTasks = getCourseTasks(URL)
+	if len(courseTasks) != 0 {
+		var taskfound = false
+		for _, taskId := range courseTasks {
+			if taskId == ps.ByName("task") {
+				taskfound = true
+			}
+		}
+		if taskfound {
+			taskProgress := getTaskProgress(ps.ByName("user"), ps.ByName("course"), ps.ByName("task"))
+			if taskProgress.TaskId != "" {
+				message, _ := json.Marshal(taskProgress)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(message)
+			} else {
+				var task TaskProgress
+				task.TaskId = ps.ByName("task")
+				task.Progress = "unresolved"
+				message, _ := json.Marshal(task)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(message)
+			}
+		} else {
+			http.Error(w, "Task not found", http.StatusNotFound)
+		}
 	} else {
-		http.Error(w, "The user didn't reach this task", http.StatusNotFound)
+		http.Error(w, "User or course not found", http.StatusNotFound)
 	}
 }
 
 func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	pingConnection()
+
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		fmt.Println(err)
@@ -178,10 +358,26 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 	}
 }
 
+func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
+	pingConnection()
+
+	userProgress, err := getUserProgress(ps.ByName("user"))
+	if err != nil {
+		http.Error(w, "Error accesing the database", http.StatusInternalServerError)
+	} else if userProgress != nil {
+		message, _ := json.Marshal(userProgress)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(message)
+	} else {
+		http.Error(w, "User not found", http.StatusNotFound)
+	}
+}
+
 func main() {
 
 	initConnection()
 	router := httprouter.New()
+	router.GET("/:user", HandleUserGet)
 	router.GET("/:user/:course", HandleUserCourseGet)
 	router.GET("/:user/:course/:task", HandleUserCourseTaskGet)
 	router.PUT("/:user/:course/:task", HandleUserCourseTaskPut)
