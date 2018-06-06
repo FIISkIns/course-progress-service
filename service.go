@@ -38,21 +38,14 @@ type CourseProgress struct {
 }
 
 type CourseInfo struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-}
-
-type CourseList struct {
-	URLs         []string `json:"urls"`
-	Titles       []string `json:"titles"`
-	Descriptions []string `json:"descriptions"`
+	Id   string `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 func initConnection() {
 	var err error
-	connection, err = sql.Open("mysql",
-		"Geo:parola@/CourseProgress")
+	connection, err = sql.Open("mysql", config.DatabaseUrl)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -177,7 +170,7 @@ func getUserProgress(userId string) ([]ProgressItem, error) {
 
 func getCourseURL(course string) string {
 	var courseInfo CourseInfo
-	resp, err := http.Get("http://127.0.0.1:8001/courses/" + course)
+	resp, err := http.Get(config.CourseManagerServiceUrl + "/courses/" + course)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -189,10 +182,10 @@ func getCourseURL(course string) string {
 	return courseInfo.URL
 }
 
-func getAllCoursesURL() []string {
+func getAllCoursesURL() map[string]string {
 	var coursesInfo []CourseInfo
-	URLs := make([]string, 0)
-	resp, err := http.Get("http://127.0.0.1:8001/courses/")
+	URLs := make(map[string]string)
+	resp, err := http.Get(config.CourseServiceUrl + "/courses")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -202,7 +195,7 @@ func getAllCoursesURL() []string {
 	}
 	json.Unmarshal(body, &coursesInfo)
 	for _, course := range coursesInfo {
-		URLs = append(URLs, course.URL)
+		URLs[course.Id] = course.URL
 	}
 	return URLs
 }
@@ -258,6 +251,30 @@ func getAllTasks(courseTasks []string, seenTasks []TaskProgress) []TaskProgress 
 		}
 	}
 	return allTasks
+}
+
+func getAllUserTasks(courseTasks []string, seenItems []ProgressItem, courseId string) []ProgressItem {
+	progressItems := make([]ProgressItem, 0)
+	var item ProgressItem
+	for _, courseTask := range courseTasks {
+		var seen = false
+		for _, seenItem := range seenItems {
+			if courseTask == seenItem.TaskId {
+				seen = true
+				item.CourseId = seenItem.CourseId
+				item.TaskId = seenItem.TaskId
+				item.Progress = seenItem.Progress
+				progressItems = append(progressItems, item)
+			}
+		}
+		if !seen {
+			item.CourseId = courseId
+			item.TaskId = courseTask
+			item.Progress = "unresolved"
+			progressItems = append(progressItems, item)
+		}
+	}
+	return progressItems
 }
 
 func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
@@ -354,22 +371,27 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 
 	if err != nil {
 		http.Error(w, "Failed to update task progress", http.StatusInternalServerError)
-		return
 	}
 }
 
 func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
 	pingConnection()
 
+	var URLs = getAllCoursesURL()
 	userProgress, err := getUserProgress(ps.ByName("user"))
 	if err != nil {
 		http.Error(w, "Error accesing the database", http.StatusInternalServerError)
-	} else if userProgress != nil {
-		message, _ := json.Marshal(userProgress)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(message)
-	} else {
-		http.Error(w, "User not found", http.StatusNotFound)
+	}
+	for courseId, URL := range URLs {
+		var courseTasks = getCourseTasks(URL)
+		progressItems := getAllUserTasks(courseTasks, userProgress, courseId)
+		if progressItems != nil {
+			message, _ := json.Marshal(progressItems)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(message)
+		} else {
+			http.Error(w, "No progress found", http.StatusNotFound)
+		}
 	}
 }
 
@@ -381,6 +403,6 @@ func main() {
 	router.GET("/:user/:course", HandleUserCourseGet)
 	router.GET("/:user/:course/:task", HandleUserCourseTaskGet)
 	router.PUT("/:user/:course/:task", HandleUserCourseTaskPut)
-	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(82), router))
+	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(config.Port), router))
 	closeConnection()
 }
