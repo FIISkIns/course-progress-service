@@ -197,7 +197,11 @@ func getCourseURL(course string) (string, error) {
 	var courseInfo CourseInfo
 	resp, err := http.Get(config.CourseManagerServiceUrl + "/courses/" + course)
 	if err != nil {
-		fmt.Println("Server error: Request to course-manager-service failed. Can not get course URL")
+		fmt.Println("Server error: Request to course-manager-service failed. Can not get course URL " + err.Error())
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("Course-manager-service returned error code ", resp.StatusCode)
 		return "", err
 	}
 
@@ -208,7 +212,7 @@ func getCourseURL(course string) (string, error) {
 	}
 	err = json.Unmarshal(body, &courseInfo)
 	if err != nil {
-		fmt.Println("Failed to unmarshal body resoponse")
+		fmt.Println("Failed to unmarshal body resoponse" + err.Error())
 		return "", err
 	}
 	return courseInfo.URL, err
@@ -217,11 +221,16 @@ func getCourseURL(course string) (string, error) {
 func getAllCoursesURL() (map[string]string, error) {
 	var coursesInfo []CourseInfo
 	URLs := make(map[string]string)
-	resp, err := http.Get(config.CourseServiceUrl + "/courses")
+	resp, err := http.Get(config.CourseManagerServiceUrl + "/courses")
 	if err != nil {
-		fmt.Println("Server error: Request to course-manager-service failed. Can not get all course's URLs")
+		fmt.Println("Server error: Request to course-manager-service failed. Can not get all course's URLs" + config.CourseManagerServiceUrl)
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("Course-manager-service returned error code ", resp.StatusCode)
+		return nil, err
+	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Failed to read body response")
@@ -229,7 +238,7 @@ func getAllCoursesURL() (map[string]string, error) {
 	}
 	err = json.Unmarshal(body, &coursesInfo)
 	if err != nil {
-		fmt.Println("Failed to unmarshal body resoponse")
+		fmt.Println("Failed to unmarshal body resoponse" + err.Error())
 		return nil, err
 	}
 
@@ -254,9 +263,14 @@ func getCourseTasks(URL string) ([]string, error) {
 	tasks := make([]string, 0)
 	resp, err := http.Get("http://" + URL + "/tasks")
 	if err != nil {
-		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks")
+		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks from " + URL)
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("Course-service returned error code ", resp.StatusCode)
+		return nil, err
+	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Failed to read body response")
@@ -354,7 +368,11 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 
 		if len(courseProgress.Tasks) != 0 {
 			var allTasks = getAllTasks(courseTasks, courseProgress.Tasks)
-			message, _ := json.Marshal(allTasks)
+			message, err := json.Marshal(allTasks)
+			if err != nil {
+				http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(message)
 		} else {
@@ -364,7 +382,11 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 				taskProgress.TaskId = task
 				taskProgress.Progress = "not started"
 				allTasks = append(allTasks, taskProgress)
-				message, _ := json.Marshal(allTasks)
+				message, err := json.Marshal(allTasks)
+				if err != nil {
+					http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.Write(message)
 			}
@@ -405,18 +427,26 @@ func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprout
 		if taskFound {
 			taskProgress, err := getTaskProgress(ps.ByName("user"), ps.ByName("course"), ps.ByName("task"))
 			if err != nil {
-				http.Error(w, "Database error", http.StatusInternalServerError)
+				http.Error(w, "Database error: can not get task's progress", http.StatusInternalServerError)
 				return
 			}
 			if taskProgress.TaskId != "" {
-				message, _ := json.Marshal(taskProgress)
+				message, err := json.Marshal(taskProgress)
+				if err != nil {
+					http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.Write(message)
 			} else {
 				var task TaskProgress
 				task.TaskId = ps.ByName("task")
 				task.Progress = "not started"
-				message, _ := json.Marshal(task)
+				message, err := json.Marshal(task)
+				if err != nil {
+					http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.Write(message)
 			}
@@ -454,6 +484,11 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 		return
 	}
 
+	if progress.Progress != "started" && progress.Progress != "completed" {
+		http.Error(w, "Invalid progress type. Valid types: 'started','completed'", http.StatusUnprocessableEntity)
+		return
+	}
+
 	courseProgress.UserId = ps.ByName("user")
 	courseProgress.CourseId = ps.ByName("course")
 	courseProgress.TaskId = ps.ByName("task")
@@ -487,7 +522,7 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 	var URLs map[string]string
 	URLs, err = getAllCoursesURL()
 	if err != nil {
-		http.Error(w, "Server error: Request to course-manager-service failed. Can not all courses's URLs", http.StatusInternalServerError)
+		http.Error(w, "Server error: Request to course-manager-service failed. Can not retrieve all courses's URLs", http.StatusInternalServerError)
 		return
 	} else if URLs == nil {
 		http.Error(w, "No URLs found", http.StatusNotFound)
@@ -524,7 +559,11 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 		return
 	}
 	if allProgressItems != nil {
-		message, _ := json.Marshal(allProgressItems)
+		message, err := json.Marshal(allProgressItems)
+		if err != nil {
+			http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(message)
 	}
