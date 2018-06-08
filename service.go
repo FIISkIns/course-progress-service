@@ -54,7 +54,7 @@ func initConnection() {
 	if err != nil {
 		panic(err.Error())
 	} else {
-		fmt.Println("Conexiune stabilita")
+		log.Println("Conexiune stabilita")
 	}
 
 	var res int
@@ -71,7 +71,7 @@ func initConnection() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println("Table COURSEPROGRESS has been successfully created")
+		log.Println("Table COURSEPROGRESS has been successfully created")
 	}
 }
 
@@ -79,26 +79,30 @@ func closeConnection() {
 	connection.Close()
 }
 
-func pingConnection() {
+func pingConnection() error {
 	err := connection.Ping()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
 
-func getTaskProgress(userID, courseID, taskID string) TaskProgress {
+func getTaskProgress(userID, courseID, taskID string) (*TaskProgress, error) {
 	stmt, err := connection.Prepare("select progress from CourseProgress where User_id = ? and course_id = ? and Task_id = ?")
 	if err != nil {
 		fmt.Println("Eroare la select: ", err)
-		log.Fatal(err)
+		return nil, err
 	}
 	defer stmt.Close()
 	var task string
 	rows, err := stmt.Query(userID, courseID, taskID)
+	if err != nil {
+		return nil, err
+	}
 	if rows.Next() {
 		err = rows.Scan(&task)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 	}
 	var taskProgress TaskProgress
@@ -106,7 +110,7 @@ func getTaskProgress(userID, courseID, taskID string) TaskProgress {
 		taskProgress.TaskId = taskID
 	}
 	taskProgress.Progress = task
-	return taskProgress
+	return &taskProgress, nil
 }
 
 func addTaskProgress(courseProgress CourseProgressInfo) error {
@@ -137,14 +141,17 @@ func updateTaskProgress(courseProgress CourseProgressInfo) error {
 	return nil
 }
 
-func getCourseProgress(userId, courseId string) []TaskProgress {
+func getCourseProgress(userId, courseId string) ([]TaskProgress, error) {
 	stmt, err := connection.Prepare("select task_id,progress from CourseProgress where User_id = ? and course_id = ?")
 	if err != nil {
 		fmt.Println("Eroare la select: ", err)
-		log.Fatal(err)
+		return nil, err
 	}
 	defer stmt.Close()
 	rows, err := stmt.Query(userId, courseId)
+	if err != nil {
+		return nil, err
+	}
 
 	var taskId, progress string
 	tasks := make([]TaskProgress, 0)
@@ -153,13 +160,14 @@ func getCourseProgress(userId, courseId string) []TaskProgress {
 	for rows.Next() {
 		err = rows.Scan(&taskId, &progress)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Println("Database error during iterating tasks")
+			return nil, err
 		}
 		newTask.TaskId = taskId
 		newTask.Progress = progress
 		tasks = append(tasks, newTask)
 	}
-	return tasks
+	return tasks, nil
 }
 
 func getUserProgress(userId string) ([]ProgressItem, error) {
@@ -185,39 +193,53 @@ func getUserProgress(userId string) ([]ProgressItem, error) {
 	return items, nil
 }
 
-func getCourseURL(course string) string {
+func getCourseURL(course string) (string, error) {
 	var courseInfo CourseInfo
 	resp, err := http.Get(config.CourseManagerServiceUrl + "/courses/" + course)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("Server error: Request to course-manager-service failed. Can not get course URL")
+		return "", err
 	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Failed to read body response")
+		return "", err
 	}
-	json.Unmarshal(body, &courseInfo)
-	return courseInfo.URL
+	err = json.Unmarshal(body, &courseInfo)
+	if err != nil {
+		fmt.Println("Failed to unmarshal body resoponse")
+		return "", err
+	}
+	return courseInfo.URL, err
 }
 
-func getAllCoursesURL() map[string]string {
+func getAllCoursesURL() (map[string]string, error) {
 	var coursesInfo []CourseInfo
 	URLs := make(map[string]string)
 	resp, err := http.Get(config.CourseServiceUrl + "/courses")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("Server error: Request to course-manager-service failed. Can not get all course's URLs")
+		return nil, err
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Failed to read body response")
+		return nil, err
 	}
-	json.Unmarshal(body, &coursesInfo)
+	err = json.Unmarshal(body, &coursesInfo)
+	if err != nil {
+		fmt.Println("Failed to unmarshal body resoponse")
+		return nil, err
+	}
+
 	for _, course := range coursesInfo {
 		URLs[course.Id] = course.URL
 	}
-	return URLs
+	return URLs, nil
 }
 
-func getCourseTasks(URL string) []string {
+func getCourseTasks(URL string) ([]string, error) {
 	type BaseTaskInfo struct {
 		Id    string `json:"id"`
 		Title string `json:"title"`
@@ -232,20 +254,26 @@ func getCourseTasks(URL string) []string {
 	tasks := make([]string, 0)
 	resp, err := http.Get("http://" + URL + "/tasks")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks")
+		return nil, err
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Failed to read body response")
+		return nil, err
 	}
-	json.Unmarshal(body, &taskGroup)
+	err = json.Unmarshal(body, &taskGroup)
+	if err != nil {
+		fmt.Println("Failed to unmarshal body resoponse")
+		return nil, err
+	}
 
 	for _, taskGroup := range taskGroup {
 		for _, taskInfo := range taskGroup.Tasks {
 			tasks = append(tasks, taskInfo.Id)
 		}
 	}
-	return tasks
+	return tasks, nil
 }
 
 func getAllTasks(courseTasks []string, seenTasks []TaskProgress) []TaskProgress {
@@ -295,15 +323,34 @@ func getAllUserTasks(courseTasks []string, seenItems []ProgressItem, courseId st
 }
 
 func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	pingConnection()
+	err := pingConnection()
+	if err != nil {
+		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
+		return
+	}
 
-	var URL = getCourseURL(ps.ByName("course"))
-	var courseTasks = getCourseTasks(URL)
+	var URL string
+	URL, err = getCourseURL(ps.ByName("course"))
+	if err != nil {
+		http.Error(w, "Server error: Request to course-manager-service failed. Can not get course URL", http.StatusInternalServerError)
+		return
+	}
+
+	var courseTasks []string
+	courseTasks, err = getCourseTasks(URL)
+	if err != nil {
+		http.Error(w, "Server error: Request to course-service failed. Can not retrieve tasks", http.StatusInternalServerError)
+		return
+	}
 
 	if len(courseTasks) != 0 {
 		var courseProgress CourseProgress
 		courseProgress.CourseId = ps.ByName("course")
-		courseProgress.Tasks = getCourseProgress(ps.ByName("user"), ps.ByName("course"))
+		courseProgress.Tasks, err = getCourseProgress(ps.ByName("user"), ps.ByName("course"))
+		if err != nil {
+			http.Error(w, "Database error: can not get course progress", http.StatusInternalServerError)
+			return
+		}
 
 		if len(courseProgress.Tasks) != 0 {
 			var allTasks = getAllTasks(courseTasks, courseProgress.Tasks)
@@ -329,19 +376,38 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 }
 
 func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	pingConnection()
+	err := pingConnection()
+	if err != nil {
+		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
+	}
 
-	var URL = getCourseURL(ps.ByName("course"))
-	var courseTasks = getCourseTasks(URL)
+	var URL string
+	URL, err = getCourseURL(ps.ByName("course"))
+	if err != nil {
+		http.Error(w, "Server error: Request to course-manager-service failed. Can not get course URL", http.StatusInternalServerError)
+		return
+	}
+
+	var courseTasks []string
+	courseTasks, err = getCourseTasks(URL)
+	if err != nil {
+		http.Error(w, "Server error: Request to course-service failed. Can not retrieve tasks", http.StatusInternalServerError)
+		return
+	}
+
 	if len(courseTasks) != 0 {
-		var taskfound = false
+		var taskFound = false
 		for _, taskId := range courseTasks {
 			if taskId == ps.ByName("task") {
-				taskfound = true
+				taskFound = true
 			}
 		}
-		if taskfound {
-			taskProgress := getTaskProgress(ps.ByName("user"), ps.ByName("course"), ps.ByName("task"))
+		if taskFound {
+			taskProgress, err := getTaskProgress(ps.ByName("user"), ps.ByName("course"), ps.ByName("task"))
+			if err != nil {
+				http.Error(w, "Database error", http.StatusInternalServerError)
+				return
+			}
 			if taskProgress.TaskId != "" {
 				message, _ := json.Marshal(taskProgress)
 				w.Header().Set("Content-Type", "application/json")
@@ -365,25 +431,41 @@ func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprout
 }
 
 func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	pingConnection()
+	err := pingConnection()
+	if err != nil {
+		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
+		return
+	}
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		fmt.Println(err)
+		http.Error(w, "Failed to read HTTP body", http.StatusBadRequest)
+		return
 	}
+
 	var courseProgress CourseProgressInfo
 	type ProgressInfo struct {
 		Progress string `json:"progress"`
 	}
 	var progress ProgressInfo
-	json.Unmarshal(body, &progress)
+	err = json.Unmarshal(body, &progress)
+	if err != nil {
+		http.Error(w, "Failed to unmarshal request", http.StatusInternalServerError)
+		return
+	}
 
 	courseProgress.UserId = ps.ByName("user")
 	courseProgress.CourseId = ps.ByName("course")
 	courseProgress.TaskId = ps.ByName("task")
 	courseProgress.Progress = progress.Progress
 
-	if getTaskProgress(courseProgress.UserId, courseProgress.CourseId, courseProgress.TaskId).Progress != "" {
+	taskExist, err := getTaskProgress(courseProgress.UserId, courseProgress.CourseId, courseProgress.TaskId)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if taskExist.Progress != "" {
 		err = updateTaskProgress(courseProgress)
 	} else {
 		err = addTaskProgress(courseProgress)
@@ -396,25 +478,55 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 }
 
 func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	pingConnection()
-
-	var URLs = getAllCoursesURL()
-	userProgress, err := getUserProgress(ps.ByName("user"))
+	err := pingConnection()
 	if err != nil {
-		http.Error(w, "Error accesing the database", http.StatusInternalServerError)
+		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
 		return
 	}
+
+	var URLs map[string]string
+	URLs, err = getAllCoursesURL()
+	if err != nil {
+		http.Error(w, "Server error: Request to course-manager-service failed. Can not all courses's URLs", http.StatusInternalServerError)
+		return
+	} else if URLs == nil {
+		http.Error(w, "No URLs found", http.StatusNotFound)
+		return
+	}
+
+	userProgress, err := getUserProgress(ps.ByName("user"))
+	if err != nil {
+		http.Error(w, "Error accessing the database", http.StatusInternalServerError)
+		return
+	}
+
+	var emptyResponse = true
+	allProgressItems := make([]ProgressItem, 0)
+
 	for courseId, URL := range URLs {
-		var courseTasks = getCourseTasks(URL)
-		progressItems := getAllUserTasks(courseTasks, userProgress, courseId)
-		if progressItems != nil {
-			message, _ := json.Marshal(progressItems)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(message)
-		} else {
-			http.Error(w, "No progress found", http.StatusNotFound)
+		var courseTasks []string
+		courseTasks, err = getCourseTasks(URL)
+		if err != nil {
+			http.Error(w, "Server error: Request to course-service failed. Can not retrieve tasks", http.StatusInternalServerError)
 			return
 		}
+
+		if courseTasks != nil {
+			emptyResponse = false
+			progressItems := getAllUserTasks(courseTasks, userProgress, courseId)
+			if progressItems != nil {
+				allProgressItems = append(allProgressItems, progressItems...)
+			}
+		}
+	}
+	if emptyResponse {
+		http.Error(w, "No courses information found. No progress found", http.StatusNotFound)
+		return
+	}
+	if allProgressItems != nil {
+		message, _ := json.Marshal(allProgressItems)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(message)
 	}
 }
 
