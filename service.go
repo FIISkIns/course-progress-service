@@ -58,7 +58,7 @@ func initConnection() {
 	}
 
 	var res int
-	err = connection.QueryRow("SELECT count(table_name) FROM information_schema.tables WHERE table_schema = 'CourseProgress' AND table_name = 'COURSEPROGRESS'").Scan(&res)
+	err = connection.QueryRow("SELECT count(table_name) FROM information_schema.tables WHERE table_name = 'COURSEPROGRESS'").Scan(&res)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func getCourseTasks(URL string) ([]string, error) {
 
 	var taskGroup []TaskGroup
 	tasks := make([]string, 0)
-	resp, err := http.Get("http://" + URL + "/tasks")
+	resp, err := http.Get(URL + "/tasks")
 	if err != nil {
 		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks from " + URL)
 		return nil, err
@@ -382,14 +382,14 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 				taskProgress.TaskId = task
 				taskProgress.Progress = "not started"
 				allTasks = append(allTasks, taskProgress)
-				message, err := json.Marshal(allTasks)
-				if err != nil {
-					http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(message)
 			}
+			message, err := json.Marshal(allTasks)
+			if err != nil {
+				http.Error(w, "JSON error: failed to marshall progress", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(message)
 		}
 	} else {
 		http.Error(w, "User or course not found", http.StatusNotFound)
