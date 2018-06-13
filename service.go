@@ -618,5 +618,6 @@ func main() {
 	router.GET("/progress/:user/:course/:task", HandleUserCourseTaskGet)
 	router.PUT("/progress/:user/:course/:task", HandleUserCourseTaskPut)
 	router.GET("/health", HandleHealthCheck)
+	router.HEAD("/health", HandleHealthCheck)
 	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(config.Port), router))
 }
