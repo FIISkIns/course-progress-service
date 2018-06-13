@@ -563,16 +563,22 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 func checkHealth(w http.ResponseWriter, url string) bool {
 	resp, err := http.Get(url)
 	if err != nil {
-		http.Error(w, "Failed to communicate with: "+url+"\nCause: "+err.Error(), http.StatusInternalServerError)
+		errorMessage := "Failed to communicate with: " + url + "\nCause: " + err.Error()
+		log.Println(errorMessage)
+		http.Error(w, errorMessage, http.StatusInternalServerError)
 		return false
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "Failed to read response from: "+url+"\nCause: "+err.Error(), http.StatusInternalServerError)
+		errorMessage := "Failed to read response from: " + url + "\nCause: " + err.Error()
+		log.Println(errorMessage)
+		http.Error(w, errorMessage, http.StatusInternalServerError)
 		return false
 	}
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Failed health check on: "+url+"\nResponse: "+string(body), http.StatusInternalServerError)
+	if (resp.StatusCode / 100) != 2 {
+		errorMessage := "Failed health check on: " + url + "\nResponse: " + string(body)
+		log.Println(errorMessage)
+		http.Error(w, errorMessage, http.StatusInternalServerError)
 		return false
 	}
 	return true
@@ -580,8 +586,9 @@ func checkHealth(w http.ResponseWriter, url string) bool {
 
 func HandleHealthCheck(w http.ResponseWriter, _ *http.Request, _ httprouter.Params) {
 	if err := connection.Ping(); err != nil {
-		log.Println("Failed health check: failed connection with database" + err.Error())
-		http.Error(w, "Database connection failed: "+err.Error(), http.StatusInternalServerError)
+		errorMessage := "Database connection failed: "+ err.Error()
+		log.Println(errorMessage)
+		http.Error(w, errorMessage, http.StatusInternalServerError)
 		return
 	}
 	if success := checkHealth(w, config.CourseManagerServiceUrl+"/health"); !success {
@@ -589,7 +596,9 @@ func HandleHealthCheck(w http.ResponseWriter, _ *http.Request, _ httprouter.Para
 	}
 	URLs, err := getAllCoursesURL()
 	if err != nil {
-		http.Error(w, "Failed to get course services from course-manager-service \nCause: "+err.Error(), http.StatusInternalServerError)
+		errorMessage := "Failed to get course services from course-manager-service \nCause: "+err.Error()
+		log.Println(errorMessage)
+		http.Error(w, errorMessage, http.StatusInternalServerError)
 		return
 	}
 	for _, URL := range URLs {
