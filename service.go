@@ -47,23 +47,26 @@ func initConnection() {
 	var err error
 	connection, err = sql.Open("mysql", config.DatabaseUrl)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to connect to database")
 	}
 
 	err = connection.Ping()
 	if err != nil {
-		panic(err.Error())
+		log.Fatal("Failed to connect to database" + err.Error())
 	} else {
 		log.Println("Conexiune stabilita")
 	}
 
-	var res int
-	err = connection.QueryRow("SELECT count(table_name) FROM information_schema.tables WHERE table_name = 'COURSEPROGRESS'").Scan(&res)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if res != 1 {
-		stmt, err := connection.Prepare("create table COURSEPROGRESS (user_id varchar(20), course_id varchar(20) NOT NULL, task_id varchar(20) NOT NULL, progress varchar(20) NOT NULL, CONSTRAINT pk_courseprogress PRIMARY KEY (user_id,course_id,task_id))")
+	var res string
+	err = connection.QueryRow("SELECT user_id FROM COURSEPROGRESS LIMIT 1").Scan(&res)
+	if err != nil && err != sql.ErrNoRows {
+		log.Println("Creating table COURSEPROGRESS"+err.Error())
+		stmt, err := connection.Prepare("create table COURSEPROGRESS (" +
+			" user_id varchar(100) NOT NULL," +
+			" course_id varchar(100) NOT NULL," +
+			" task_id varchar(100) NOT NULL," +
+			" progress varchar(30) NOT NULL," +
+			" CONSTRAINT pk_courseprogress PRIMARY KEY (user_id,course_id,task_id))")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -73,18 +76,6 @@ func initConnection() {
 		}
 		log.Println("Table COURSEPROGRESS has been successfully created")
 	}
-}
-
-func closeConnection() {
-	connection.Close()
-}
-
-func pingConnection() error {
-	err := connection.Ping()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func getTaskProgress(userID, courseID, taskID string) (*TaskProgress, error) {
@@ -337,7 +328,7 @@ func getAllUserTasks(courseTasks []string, seenItems []ProgressItem, courseId st
 }
 
 func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	err := pingConnection()
+	err := connection.Ping()
 	if err != nil {
 		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
 		return
@@ -398,7 +389,7 @@ func HandleUserCourseGet(w http.ResponseWriter, _ *http.Request, ps httprouter.P
 }
 
 func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	err := pingConnection()
+	err := connection.Ping()
 	if err != nil {
 		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
 	}
@@ -461,7 +452,7 @@ func HandleUserCourseTaskGet(w http.ResponseWriter, _ *http.Request, ps httprout
 }
 
 func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	err := pingConnection()
+	err := connection.Ping()
 	if err != nil {
 		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
 		return
@@ -513,7 +504,7 @@ func HandleUserCourseTaskPut(w http.ResponseWriter, r *http.Request, ps httprout
 }
 
 func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params) {
-	err := pingConnection()
+	err := connection.Ping()
 	if err != nil {
 		http.Error(w, "Database error: unable to connect", http.StatusInternalServerError)
 		return
@@ -569,14 +560,54 @@ func HandleUserGet(w http.ResponseWriter, _ *http.Request, ps httprouter.Params)
 	}
 }
 
+func checkHealth(w http.ResponseWriter, url string) bool {
+	resp, err := http.Get(url)
+	if err != nil {
+		http.Error(w, "Failed to communicate with: "+url+"\nCause: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Failed to read response from: "+url+"\nCause: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Failed health check on: "+url+"\nResponse: "+string(body), http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
+func HandleHealthCheck(w http.ResponseWriter, _ *http.Request, _ httprouter.Params) {
+	if err := connection.Ping(); err != nil {
+		log.Println("Failed health check: failed connection with database" + err.Error())
+		http.Error(w, "Database connection failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if success := checkHealth(w, config.CourseManagerServiceUrl+"/health"); !success {
+		return
+	}
+	URLs, err := getAllCoursesURL()
+	if err != nil {
+		http.Error(w, "Failed to get course services from course-manager-service \nCause: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, URL := range URLs {
+		if success := checkHealth(w, URL+"/health"); !success {
+			return
+		}
+	}
+}
+
 func main() {
 	initConfig()
 	initConnection()
+	defer connection.Close()
 	router := httprouter.New()
-	router.GET("/:user", HandleUserGet)
-	router.GET("/:user/:course", HandleUserCourseGet)
-	router.GET("/:user/:course/:task", HandleUserCourseTaskGet)
-	router.PUT("/:user/:course/:task", HandleUserCourseTaskPut)
+	router.GET("/progress/:user", HandleUserGet)
+	router.GET("/progress/:user/:course", HandleUserCourseGet)
+	router.GET("/progress/:user/:course/:task", HandleUserCourseTaskGet)
+	router.PUT("/progress/:user/:course/:task", HandleUserCourseTaskPut)
+	router.GET("/health", HandleHealthCheck)
 	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(config.Port), router))
-	closeConnection()
 }
