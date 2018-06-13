@@ -79,7 +79,7 @@ func initConnection() {
 }
 
 func getTaskProgress(userID, courseID, taskID string) (*TaskProgress, error) {
-	stmt, err := connection.Prepare("select progress from CourseProgress where User_id = ? and course_id = ? and Task_id = ?")
+	stmt, err := connection.Prepare("select progress from COURSEPROGRESS where user_id = ? and course_id = ? and task_id = ?")
 	if err != nil {
 		fmt.Println("Eroare la select: ", err)
 		return nil, err
@@ -105,7 +105,7 @@ func getTaskProgress(userID, courseID, taskID string) (*TaskProgress, error) {
 }
 
 func addTaskProgress(courseProgress CourseProgressInfo) error {
-	stmt, err := connection.Prepare("INSERT INTO COURSEPROGRESS(User_id,course_id,Task_id,progress) values (?,?,?,?)")
+	stmt, err := connection.Prepare("INSERT INTO COURSEPROGRESS(user_id,course_id,task_id,progress) values (?,?,?,?)")
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -133,7 +133,7 @@ func updateTaskProgress(courseProgress CourseProgressInfo) error {
 }
 
 func getCourseProgress(userId, courseId string) ([]TaskProgress, error) {
-	stmt, err := connection.Prepare("select task_id,progress from CourseProgress where User_id = ? and course_id = ?")
+	stmt, err := connection.Prepare("select task_id,progress from COURSEPROGRESS where user_id = ? and course_id = ?")
 	if err != nil {
 		fmt.Println("Eroare la select: ", err)
 		return nil, err
