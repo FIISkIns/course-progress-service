@@ -254,7 +254,7 @@ func getCourseTasks(URL string) ([]string, error) {
 	tasks := make([]string, 0)
 	resp, err := http.Get(URL + "/tasks")
 	if err != nil {
-		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks from " + URL)
+		fmt.Println("Server error: Request to course-service failed. Can not retrieve tasks from " + URL + "/tasks")
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
